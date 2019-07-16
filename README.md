@@ -3,7 +3,7 @@ The purpose of this project is to supply customers a stable method to sync betwe
 
 The project includes AWS Lambda code together with AWS IAM sample policies.
 
-Blog post: https://docs.google.com/document/d/1K14s8JH1t6WdqnvwHawP2VIYdl-9iSqIqsnnvcR2cvg/edit?usp=sharing
+Blog post: https://cloudinary.com/blog/ftp_api_for_cloudinary_part_1_real_time_synchronization
 
 ## License
 Released under the MIT license.

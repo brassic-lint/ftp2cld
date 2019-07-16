@@ -1,5 +1,5 @@
 # Real-time Sync is a flow triggered by S3 bucket Put, Restore, and Remove events
-A diagram and flow description is in the blog post: <TBD>
+A diagram and flow description is in the blog post: https://cloudinary.com/blog/ftp_api_for_cloudinary_part_1_real_time_synchronization
 
 
 ## Whitelist your S3 Cloudinary bucket to read directly from your private S3 bucket
