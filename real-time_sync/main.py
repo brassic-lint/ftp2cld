@@ -12,6 +12,7 @@ import cloudinary
 from cloudinary.uploader import upload, destroy
 import logging
 import urllib.parse
+import boto3
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -166,6 +167,23 @@ def sync_file(s3_event_type, bucket_name, key, s3_event_body):
             status_code, status_msg = delete_file(key, resource_type, cld_type, cld_public_id)
     return status_code, status_msg
 
+def send_alert(type, key, status_code, status_msg):
+    """
+    Send an alert to an SNS topic
+    """
+    subject = type + ':' + key
+    message = 'Syncing ' + key + ' Returned: ' + str(status_code) + ', ' + status_msg
+    sns = boto3.client('sns')
+    res = sns.publish(
+        TopicArn=optional_environ('notification_topic'),
+        Subject=subject,
+        Message=message
+    )
+
+    # log debug response
+    logger.debug(res)
+    return res
+
 
 def lambda_handler(event, context):
     """
@@ -192,6 +210,7 @@ def lambda_handler(event, context):
             status_code, status_msg = 500, "Invalid S3 event"
             logger.error(e)
     logger.info('Returned: ' + str(status_code) + ', ' + status_msg)
+    if optional_environ('notification_topic') and status_code != 200 : send_alert("ERROR", key, status_code, status_msg)
     return {
         "statusCode": status_code,
         "body": status_msg

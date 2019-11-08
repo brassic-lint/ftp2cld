@@ -12,6 +12,7 @@ https://cloudinary.com/documentation/upload_images#private_storage_url
 
 ## Optional environment variables:
 - notification_url => A webhook to receive the status of each completed operation. Documentation at https://cloudinary.com/documentation/upload_images#upload_notifications
+- notification_topic => ARN of an SNS topic that can be used to alert on failures
 - upload_only_mode => [true / false] Default: false.  
 In this mode, deleted files from the FTP source would not be deleted from Cloudinary. This is to allow having a single source of truth at Cloudinary while saving storage from FTP storage.
   The FTP storage can be kept clean by a periodical script, or by hooking to the notification URL above.
