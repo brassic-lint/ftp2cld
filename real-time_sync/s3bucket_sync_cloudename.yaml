@@ -9,25 +9,19 @@ Resources:
       Runtime: python3.7
       CodeUri: .
       Description: ''
-      MemorySize: 128
-      Timeout: 3
+      MemorySize: 256
+      Timeout: 300
       Role: >-
         arn:aws:iam::365643640437:role/service-role/s3bucket_sync-role-nu1j1up5
       Events:
-        BucketEvent1:
-          Type: S3
+        SQS1:
+          Type: SQS
           Properties:
-            Bucket:
-              Ref: Bucket1
-            Events:
-              - 's3:ObjectCreated:*'
-              - 's3:ObjectRemoved:*'
-              - !<tag:yaml.org,2002:js/undefined> ''
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: sync_cloudinary
+            Queue:
+              'Fn::GetAtt':
+                - SQSQueue1
+                - Arn
+            BatchSize: 5
       Environment:
         Variables:
           CLOUDINARY_URL: cloudinary://123:abc@my_cloud/my_cloud-res.cloudinary.com?cname=my_cloud-res.cloudinary.com
@@ -36,5 +30,6 @@ Resources:
           notification_topic: 'sns_topic'
           s3_sync_root: sync_cloudinary
           skip_reload_same_etag: 'false'
-  Bucket1:
-    Type: 'AWS::S3::Bucket'
+  SQSQueue1:
+    Type: 'AWS::SQS::Queue'
+    Properties: {}

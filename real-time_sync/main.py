@@ -13,6 +13,7 @@ from cloudinary.uploader import upload, destroy
 import logging
 import urllib.parse
 import boto3
+import json
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -89,6 +90,7 @@ def upload_file(bucket_name, key, cld_public_id, resource_type, cld_type, event_
                 resource_type=resource_type,
                 type=cld_type,
                 notification_url=optional_environ("notification_url"))
+            
         else:
             upload_result = cloudinary.uploader.upload_large(
                 's3://' + bucket_name + '/' + urllib.parse.unquote_plus(key),
@@ -97,6 +99,8 @@ def upload_file(bucket_name, key, cld_public_id, resource_type, cld_type, event_
                 type=cld_type,
                 notification_url=optional_environ("notification_url"))
         # etags can behave differently on different encryption storage types and multi-part uploads, thus not a viable solution
+        logger.info(upload_result)
+
         if "bytes" in upload_result and upload_result["bytes"] == event_size:
             status_code, status_msg = 200, "OK"
         else:
@@ -106,9 +110,12 @@ def upload_file(bucket_name, key, cld_public_id, resource_type, cld_type, event_
             status_code, status_msg = 404, "File not found on S3"
         elif isinstance(e.args[0], str) and e.args[0].endswith('Access Denied'):
             status_code, status_msg = 401, "Access denied on S3"
+        elif isinstance(e.args[0], str) and e.args[0].endswith('Timeout waiting for parallel processing.'):
+            status_code, status_msg = 420, "Rate Limit"
         else:
             status_code, status_msg = 500, "Upload_file has failed"
-            logger.error(e)
+        logger.error(e)
+    status_code, status_msg = 420, "Rate Limit"
     return status_code, status_msg
 
 
@@ -178,18 +185,13 @@ def send_alert(type, key, status_code, status_msg):
         TopicArn=optional_environ('notification_topic'),
         Subject=subject,
         Message=message
-    )
+        )
 
     # log debug response
     logger.debug(res)
     return res
 
-
-def lambda_handler(event, context):
-    """
-    This is the entry point and need to be specified in the Lambda configuration.
-    It runs sanity tests and validations before starting to sync.
-    """
+def processS3event(event):
     status_code, status_msg = 405, "Event was skipped"
     try:
         s3_event_type = event["Records"][0]["eventName"].split(":")
@@ -199,19 +201,65 @@ def lambda_handler(event, context):
             raise Exception('Bucket name with period is not supported')
         key = s3_event_body["object"]["key"]
         if (urllib.parse.unquote_plus(key).startswith(environ["s3_sync_root"])):
-            status_code, status_msg = sync_file(
-                s3_event_type, bucket_name, key, s3_event_body)
+            status_code, status_msg = sync_file(s3_event_type, bucket_name, key, s3_event_body)
         else:
             status_code, status_msg = 403, "Forbidden - S3 event came from external folder to the configured s3_sync_root"
     except Exception as e:
+        key = "<<UKNOWN>>"
         if isinstance(e.args[0], str) and e.args[0] == 'Bucket name with period is not supported':
             status_code, status_msg = 501, e.args[0]
         else:
             status_code, status_msg = 500, "Invalid S3 event"
             logger.error(e)
-    logger.info('Returned: ' + str(status_code) + ', ' + status_msg)
-    if optional_environ('notification_topic') and status_code != 200 : send_alert("ERROR", key, status_code, status_msg)
-    return {
-        "statusCode": status_code,
-        "body": status_msg
-    }
+    return status_code, status_msg, key
+
+def SQSurl(arn):
+    arnComponent = arn.split(":")
+    return "https://sqs." + arnComponent[3] +".amazonaws.com/" + arnComponent[4] + "/" + arnComponent[5]
+
+def reQueue(queue, message) :
+    if "retries" in message["Records"][0] and message["Records"][0]["retries"] <= 5 :
+        message["Records"][0]["retries"] += 1
+    elif "retries" in message["Records"][0] and message["Records"][0]["retries"] > 5 :
+        send_alert("FATAL", message["Records"][0]["s3"]["object"]["key"], 420, "Final failure")
+        return None
+    else :
+        message["Records"][0]["retries"] = 1
+
+    logger.info("Requeuing: " + str(message["Records"][0]["retries"]))
+    sqs = boto3.client('sqs')
+    response = sqs.send_message(
+        QueueUrl=queue,
+        MessageBody=json.dumps(message),
+        DelaySeconds=300,
+        )
+    logger.info(response)
+    return response
+
+
+def lambda_handler(event, context):
+    """
+    This is the entry point and need to be specified in the Lambda configuration.
+    It runs sanity tests and validations before starting to sync.
+    """
+    responseObj = []
+
+    for record in event["Records"] :
+        s3event = json.loads(record["body"])
+        status_code, status_msg, key = processS3event(s3event)
+        
+        response = {
+            "object": key,
+            "statusCode": status_code,
+            "body": status_msg
+            }
+        logger.info(response)
+        
+        if status_code == 420 : reQueue(SQSurl(record["eventSourceARN"]), s3event)
+        
+        if optional_environ('notification_topic') and status_code not in [200, 420]:
+            send_alert("ERROR", key, status_code, status_msg)
+        responseObj.append(response)
+
+    logger.info(responseObj)
+    return responseObj
