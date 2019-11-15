@@ -90,7 +90,6 @@ def upload_file(bucket_name, key, cld_public_id, resource_type, cld_type, event_
                 resource_type=resource_type,
                 type=cld_type,
                 notification_url=optional_environ("notification_url"))
-            
         else:
             upload_result = cloudinary.uploader.upload_large(
                 's3://' + bucket_name + '/' + urllib.parse.unquote_plus(key),
@@ -99,8 +98,6 @@ def upload_file(bucket_name, key, cld_public_id, resource_type, cld_type, event_
                 type=cld_type,
                 notification_url=optional_environ("notification_url"))
         # etags can behave differently on different encryption storage types and multi-part uploads, thus not a viable solution
-        logger.info(upload_result)
-
         if "bytes" in upload_result and upload_result["bytes"] == event_size:
             status_code, status_msg = 200, "OK"
         else:
@@ -110,12 +107,13 @@ def upload_file(bucket_name, key, cld_public_id, resource_type, cld_type, event_
             status_code, status_msg = 404, "File not found on S3"
         elif isinstance(e.args[0], str) and e.args[0].endswith('Access Denied'):
             status_code, status_msg = 401, "Access denied on S3"
-        elif isinstance(e.args[0], str) and e.args[0].endswith('Timeout waiting for parallel processing.'):
-            status_code, status_msg = 420, "Rate Limit"
+        elif isinstance(e.args[0], str) and 'Timeout waiting' in e.args[0]:
+            status_code, status_msg = 429, "Rate Limit (processing)"
+        elif isinstance(e.args[0], str) and 'api operations reached' in e.args[0]:
+            status_code, status_msg = 420, "Rate Limit (api)"
         else:
             status_code, status_msg = 500, "Upload_file has failed"
         logger.error(e)
-    status_code, status_msg = 420, "Rate Limit"
     return status_code, status_msg
 
 
@@ -217,7 +215,7 @@ def SQSurl(arn):
     arnComponent = arn.split(":")
     return "https://sqs." + arnComponent[3] +".amazonaws.com/" + arnComponent[4] + "/" + arnComponent[5]
 
-def reQueue(queue, message) :
+def reQueue(queue, message, delay) :
     if "retries" in message["Records"][0] and message["Records"][0]["retries"] <= 5 :
         message["Records"][0]["retries"] += 1
     elif "retries" in message["Records"][0] and message["Records"][0]["retries"] > 5 :
@@ -231,7 +229,7 @@ def reQueue(queue, message) :
     response = sqs.send_message(
         QueueUrl=queue,
         MessageBody=json.dumps(message),
-        DelaySeconds=300,
+        DelaySeconds=delay,
         )
     logger.info(response)
     return response
@@ -255,9 +253,12 @@ def lambda_handler(event, context):
             }
         logger.info(response)
         
-        if status_code == 420 : reQueue(SQSurl(record["eventSourceARN"]), s3event)
+        if status_code == 420:
+            reQueue(SQSurl(record["eventSourceARN"]), s3event, 900)
+        elif status_code == 429:
+            reQueue(SQSurl(record["eventSourceARN"]), s3event, 300)
         
-        if optional_environ('notification_topic') and status_code not in [200, 420]:
+        if optional_environ('notification_topic') and status_code not in [200, 420, 429]:
             send_alert("ERROR", key, status_code, status_msg)
         responseObj.append(response)
 
